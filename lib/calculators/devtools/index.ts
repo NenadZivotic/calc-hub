@@ -1180,6 +1180,568 @@ function computeAiReadiness(v: Record<string, number | string>): ResultItem[] {
 }
 
 /* ------------------------------------------------------------------ */
+/* 8. JSON formatter & validator                                       */
+/* ------------------------------------------------------------------ */
+
+function jsonDepth(n: unknown, d = 1): number {
+  if (Array.isArray(n))
+    return n.length ? Math.max(...n.map((x) => jsonDepth(x, d + 1))) : d;
+  if (n && typeof n === "object")
+    return Math.max(
+      d,
+      ...Object.values(n as Record<string, unknown>).map((x) =>
+        jsonDepth(x, d + 1),
+      ),
+    );
+  return d;
+}
+
+function countKeys(n: unknown): number {
+  if (Array.isArray(n)) return n.reduce((a, x) => a + countKeys(x), 0);
+  if (n && typeof n === "object")
+    return (
+      Object.keys(n as object).length +
+      Object.values(n as Record<string, unknown>).reduce(
+        (a, x) => a + countKeys(x),
+        0,
+      )
+    );
+  return 0;
+}
+
+function computeJson(v: Record<string, number | string>): ResultItem[] {
+  const raw = String(v.json ?? "");
+  if (!raw.trim()) return noInput();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const posM = msg.match(/position\s+(\d+)/i);
+    let loc = "";
+    if (posM) {
+      const pos = Number(posM[1]);
+      const upto = raw.slice(0, pos);
+      const line = upto.split("\n").length;
+      const col = pos - upto.lastIndexOf("\n");
+      loc = ` — near line ${line}, column ${col}`;
+    }
+    return [
+      {
+        label: "Invalid JSON",
+        value: msg + loc,
+        tone: "bad",
+        wide: true,
+        hint: "Common causes: trailing commas, single quotes, unquoted keys, or a truncated paste.",
+      },
+    ];
+  }
+
+  const formatted = JSON.stringify(parsed, null, 2);
+  const topKeys = Array.isArray(parsed)
+    ? `array of ${parsed.length} item${parsed.length === 1 ? "" : "s"}`
+    : parsed && typeof parsed === "object"
+      ? `object with ${Object.keys(parsed as object).length} top-level key${Object.keys(parsed as object).length === 1 ? "" : "s"}`
+      : `scalar ${typeof parsed}`;
+  return [
+    { label: "Valid JSON", value: topKeys, tone: "good", wide: true },
+    {
+      label: "Stats",
+      value: `${countKeys(parsed)} total keys · depth ${jsonDepth(parsed)} · ${new Blob([raw]).size} B → ${new Blob([formatted]).size} B`,
+      wide: true,
+    },
+    { label: "Formatted", value: formatted, mono: true, wide: true },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 9. Cron expression parser                                           */
+/* ------------------------------------------------------------------ */
+
+const CRON_NAMES: Record<number, string> = {
+  3: "month/day-of-month",
+  4: "month",
+  5: "day-of-week (0–6, 0=Sun)",
+};
+
+function cronField(
+  field: string,
+  min: number,
+  max: number,
+): Set<number> | null {
+  const out = new Set<number>();
+  for (const part of field.split(",")) {
+    const m = part.match(/^(\*|\d+)(?:-(\d+))?(?:\/(\d+))?$/);
+    if (!m) return null;
+    let lo = m[1] === "*" ? min : Number(m[1]);
+    let hi = m[2] ? Number(m[2]) : m[1] === "*" ? max : lo;
+    const step = m[3] ? Number(m[3]) : 1;
+    if (lo < min || hi > max || lo > hi || step < 1) return null;
+    for (let x = lo; x <= hi; x += step) out.add(x);
+  }
+  return out;
+}
+
+function computeCron(v: Record<string, number | string>): ResultItem[] {
+  const expr = String(v.expression ?? "").trim();
+  if (!expr) return noInput();
+  const fields = expr.split(/\s+/);
+  if (fields.length !== 5)
+    return [
+      {
+        label: "Invalid",
+        value: `Expected 5 fields (min hour day month weekday), got ${fields.length}`,
+        tone: "bad",
+        wide: true,
+        hint: "This parser reads the standard 5-field cron format — @daily and 6/7-field variants aren't supported.",
+      },
+    ];
+
+  const ranges: [number, number][] = [
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [0, 7],
+  ];
+  const sets: Set<number>[] = [];
+  for (let i = 0; i < 5; i++) {
+    const s = cronField(fields[i], ranges[i][0], ranges[i][1]);
+    if (!s)
+      return [
+        {
+          label: "Invalid",
+          value: `Field ${i + 1} ("${fields[i]}") can't be parsed`,
+          tone: "bad",
+          wide: true,
+          hint: `Field ${i + 1} is the ${CRON_NAMES[i] ?? "field"} — allowed range ${ranges[i][0]}–${ranges[i][1]}.`,
+        },
+      ];
+    sets.push(s);
+  }
+  const domRestricted = fields[2] !== "*";
+  const dowRestricted = fields[4] !== "*";
+  // Standard cron: when BOTH dom and dow are restricted, match is OR
+  const dowMatch = (d: Date) => {
+    const dow = d.getDay();
+    const domOk = sets[2].has(d.getDate());
+    const dowOk = sets[4].has(dow) || (dow === 0 && sets[4].has(7));
+    return domRestricted && dowRestricted ? domOk || dowOk : domOk && dowOk;
+  };
+
+  const runs: string[] = [];
+  const t = new Date(Date.now() + 60_000);
+  t.setSeconds(0, 0);
+  for (let i = 0; i < 366 * 24 * 60 && runs.length < 5; i++) {
+    const d = new Date(t.getTime() + i * 60_000);
+    if (
+      sets[0].has(d.getMinutes()) &&
+      sets[1].has(d.getHours()) &&
+      sets[3].has(d.getMonth() + 1) &&
+      dowMatch(d)
+    )
+      runs.push(
+        d.toLocaleString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }),
+      );
+  }
+
+  const plain: string[] = [];
+  const [fMin, fHour, fDom, fMon, fDow] = fields;
+  if (expr === "* * * * *") plain.push("Every minute");
+  else if (fMin !== "*" && fHour === "*")
+    plain.push(`Every hour at minute ${fMin}`);
+  else if (fDom === "*" && fMon === "*" && fDow === "*")
+    plain.push(`Daily at ${fHour.padStart(2, "0")}:${fMin.padStart(2, "0")}`);
+  else if (fDom === "*" && fMon === "*")
+    plain.push(
+      `On day-of-week ${fDow} at ${fHour.padStart(2, "0")}:${fMin.padStart(2, "0")}`,
+    );
+  else if (fDow === "*" && fMon === "*")
+    plain.push(
+      `On day ${fDom} of each month at ${fHour.padStart(2, "0")}:${fMin.padStart(2, "0")}`,
+    );
+  else plain.push("See the next runs below for the concrete schedule");
+
+  return [
+    {
+      label: "In plain English",
+      value: plain[0],
+      tone: "primary",
+      wide: true,
+      hint:
+        domRestricted && dowRestricted
+          ? "Note: day-of-month and day-of-week both set — cron ORs them, not ANDs."
+          : undefined,
+    },
+    {
+      label: "Next 5 runs (your local time)",
+      value: runs.length ? runs.join("\n") : "No run found within a year",
+      mono: true,
+      wide: true,
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 10. Regex tester                                                    */
+/* ------------------------------------------------------------------ */
+
+function computeRegex(v: Record<string, number | string>): ResultItem[] {
+  const pattern = String(v.pattern ?? "");
+  const text = String(v.text ?? "");
+  if (!pattern && !text) return noInput();
+  if (!pattern)
+    return [
+      {
+        label: "Waiting",
+        value: "Enter a pattern",
+        tone: "primary",
+        wide: true,
+      },
+    ];
+
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, String(v.flags ?? "g"));
+  } catch (e) {
+    return [
+      {
+        label: "Invalid pattern",
+        value: e instanceof Error ? e.message : String(e),
+        tone: "bad",
+        wide: true,
+      },
+    ];
+  }
+
+  const matches: { m: string; idx: number; groups: string[] }[] = [];
+  if (re.global) {
+    let mm: RegExpExecArray | null;
+    let guard = 0;
+    while ((mm = re.exec(text)) && matches.length < 100 && guard++ < 1000) {
+      matches.push({
+        m: mm[0],
+        idx: mm.index,
+        groups: mm.slice(1).map(String),
+      });
+      if (mm[0] === "") re.lastIndex++;
+    }
+  } else {
+    const mm = re.exec(text);
+    if (mm)
+      matches.push({
+        m: mm[0],
+        idx: mm.index,
+        groups: mm.slice(1).map(String),
+      });
+  }
+
+  const out: ResultItem[] = [
+    {
+      label: "Verdict",
+      value: `${matches.length} match${matches.length === 1 ? "" : "es"}`,
+      tone: matches.length ? "good" : "bad",
+      wide: true,
+      hint: `/${pattern}/${String(v.flags ?? "g")} against ${text.length} chars`,
+    },
+  ];
+  for (const [i, mm] of matches.slice(0, 20).entries())
+    out.push({
+      label: `Match ${i + 1} @ index ${mm.idx}`,
+      value: mm.m,
+      mono: true,
+      wide: true,
+      hint: mm.groups.length ? `groups: ${mm.groups.join(" | ")}` : undefined,
+    });
+  if (matches.length > 20)
+    out.push({
+      label: "…",
+      value: `+${matches.length - 20} more matches (showing first 20)`,
+      wide: true,
+    });
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* 11. Base64 encoder / decoder                                        */
+/* ------------------------------------------------------------------ */
+
+function b64encode(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
+}
+
+function b64decode(s: string): string {
+  const bin = atob(s.replace(/\s+/g, ""));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function computeBase64(v: Record<string, number | string>): ResultItem[] {
+  const input = String(v.input ?? "");
+  if (!input) return noInput();
+  if (String(v.mode) === "decode") {
+    try {
+      const out = b64decode(input);
+      return [
+        { label: "Decoded", value: out, mono: true, wide: true, tone: "good" },
+        {
+          label: "Stats",
+          value: `${input.replace(/\s+/g, "").length} b64 chars → ${new TextEncoder().encode(out).length} bytes`,
+          wide: true,
+        },
+      ];
+    } catch {
+      return [
+        {
+          label: "Invalid Base64",
+          value: "Input can't be decoded — bad characters or wrong padding",
+          tone: "bad",
+          wide: true,
+          hint: "Whitespace is ignored. Base64URL (- and _ instead of + and /) is common in JWTs — swap the characters first.",
+        },
+      ];
+    }
+  }
+  const out = b64encode(input);
+  return [
+    { label: "Encoded", value: out, mono: true, wide: true, tone: "good" },
+    {
+      label: "Stats",
+      value: `${new TextEncoder().encode(input).length} bytes → ${out.length} chars (~33% size increase)`,
+      wide: true,
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 12. URL encoder / decoder / analyzer                                */
+/* ------------------------------------------------------------------ */
+
+function computeUrl(v: Record<string, number | string>): ResultItem[] {
+  const input = String(v.input ?? "").trim();
+  if (!input) return noInput();
+  const mode = String(v.mode ?? "analyze");
+
+  if (mode === "encode")
+    return [
+      {
+        label: "Encoded",
+        value: encodeURIComponent(input),
+        mono: true,
+        wide: true,
+        tone: "good",
+        hint: "encodeURIComponent — safe for query-string values, encodes / : & = ?",
+      },
+    ];
+  if (mode === "decode") {
+    try {
+      return [
+        {
+          label: "Decoded",
+          value: decodeURIComponent(input),
+          mono: true,
+          wide: true,
+          tone: "good",
+        },
+      ];
+    } catch {
+      return [
+        {
+          label: "Invalid",
+          value: "Malformed percent-encoding",
+          tone: "bad",
+          wide: true,
+          hint: "Each % must be followed by two hex digits.",
+        },
+      ];
+    }
+  }
+
+  try {
+    const u = new URL(input);
+    const out: ResultItem[] = [
+      { label: "Protocol", value: u.protocol.replace(":", "") },
+      { label: "Host", value: u.hostname, mono: true },
+      { label: "Path", value: u.pathname, mono: true, wide: true },
+    ];
+    if (u.port) out.push({ label: "Port", value: u.port, mono: true });
+    const params = [...u.searchParams.entries()];
+    out.push({
+      label: `Query params (${params.length})`,
+      value: params.length
+        ? params.map(([k, val]) => `${k} = ${val}`).join("\n")
+        : "none",
+      mono: true,
+      wide: true,
+      hint: "Values shown already percent-decoded",
+    });
+    if (u.hash)
+      out.push({ label: "Fragment", value: u.hash.slice(1), mono: true });
+    return out;
+  } catch {
+    return [
+      {
+        label: "Not a valid URL",
+        value: "Can't parse — needs a scheme like https://",
+        tone: "bad",
+        wide: true,
+        hint: "Try https://example.com/path?a=1 — or switch the mode to encode/decode.",
+      },
+    ];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 13. UUID generator                                                  */
+/* ------------------------------------------------------------------ */
+
+function computeUuid(v: Record<string, number | string>): ResultItem[] {
+  const count = Math.min(50, Math.max(1, Math.round(Number(v.count) || 10)));
+  const upper = String(v.format) === "upper";
+  const uuids = Array.from({ length: count }, () => crypto.randomUUID());
+  const list = upper ? uuids.map((u) => u.toUpperCase()) : uuids;
+  return [
+    {
+      label: `${count} UUID${count > 1 ? "s" : ""} (v4, random)`,
+      value: list.join("\n"),
+      mono: true,
+      wide: true,
+      tone: "good",
+      hint: "Generated with crypto.randomUUID() — cryptographically secure, ~2^122 possible values.",
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 14. Color converter                                                 */
+/* ------------------------------------------------------------------ */
+
+function parseColor(raw: string): { r: number; g: number; b: number } | null {
+  const s = raw.trim().toLowerCase();
+  const hex = s.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3)
+      h = h
+        .split("")
+        .map((c) => c + c)
+        .join("");
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16),
+    };
+  }
+  const rgb = s.match(/^rgba?\((\d+)[\s,]+(\d+)[\s,]+(\d+)/);
+  if (rgb) return { r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3]) };
+  const hsl = s.match(/^hsla?\((\d+)[\s,]+(\d+)%?[\s,]+(\d+)%?/);
+  if (hsl) {
+    const h = (Number(hsl[1]) % 360) / 360,
+      s2 = Number(hsl[2]) / 100,
+      l = Number(hsl[3]) / 100;
+    const q = l < 0.5 ? l * (1 + s2) : l + s2 - l * s2;
+    const p = 2 * l - q;
+    const hue = (t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    return {
+      r: Math.round(hue(h + 1 / 3) * 255),
+      g: Math.round(hue(h) * 255),
+      b: Math.round(hue(h - 1 / 3) * 255),
+    };
+  }
+  return null;
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rn = r / 255,
+    gn = g / 255,
+    bn = b / 255;
+  const max = Math.max(rn, gn, bn),
+    min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, Math.round(l * 100)];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h =
+    max === rn
+      ? (gn - bn) / d + (gn < bn ? 6 : 0)
+      : max === gn
+        ? (bn - rn) / d + 2
+        : (rn - gn) / d + 4;
+  return [Math.round(h * 60), Math.round(s * 100), Math.round(l * 100)];
+}
+
+function luminance(r: number, g: number, b: number): number {
+  const f = (c: number) => {
+    const x = c / 255;
+    return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+function computeColor(v: Record<string, number | string>): ResultItem[] {
+  const input = String(v.color ?? "");
+  if (!input.trim()) return noInput();
+  const c = parseColor(input);
+  if (!c)
+    return [
+      {
+        label: "Not a color",
+        value: "Can't parse that input",
+        tone: "bad",
+        wide: true,
+        hint: "Accepted: #3b82f6, #48f, rgb(59,130,246), hsl(217,91%,60%)",
+      },
+    ];
+  const hex = `#${[c.r, c.g, c.b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+  const [h, s, l] = rgbToHsl(c.r, c.g, c.b);
+  const lum = luminance(c.r, c.g, c.b);
+  const contrastWhite = (1.05 / (lum + 0.05)).toFixed(2);
+  const contrastBlack = ((lum + 0.05) / 0.05).toFixed(2);
+  return [
+    { label: "HEX", value: hex, mono: true, tone: "primary" },
+    {
+      label: "RGB",
+      value: `rgb(${c.r}, ${c.g}, ${c.b})`,
+      mono: true,
+    },
+    {
+      label: "HSL",
+      value: `hsl(${h}, ${s}%, ${l}%)`,
+      mono: true,
+    },
+    {
+      label: "Contrast vs white text",
+      value: `${contrastWhite}:1`,
+      tone: Number(contrastWhite) >= 4.5 ? "good" : "bad",
+      hint: "WCAG AA needs ≥4.5:1",
+    },
+    {
+      label: "Contrast vs black text",
+      value: `${contrastBlack}:1`,
+      tone: Number(contrastBlack) >= 4.5 ? "good" : "bad",
+      hint: "WCAG AA needs ≥4.5:1",
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
 /* Definitions                                                         */
 /* ------------------------------------------------------------------ */
 
