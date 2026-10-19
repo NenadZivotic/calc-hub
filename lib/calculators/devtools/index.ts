@@ -826,10 +826,13 @@ function botAccess(bot: string, groups: RobotsGroup[]): Access {
 const AI_BOTS: { engine: string; bots: string[] }[] = [
   { engine: "ChatGPT search", bots: ["OAI-SearchBot", "ChatGPT-User"] },
   { engine: "OpenAI training", bots: ["GPTBot"] },
-  { engine: "Claude", bots: ["ClaudeBot", "Claude-User"] },
+  { engine: "Claude", bots: ["ClaudeBot", "Claude-User", "Claude-SearchBot"] },
   { engine: "Perplexity", bots: ["PerplexityBot", "Perplexity-User"] },
   { engine: "Google AI", bots: ["Googlebot"] },
 ];
+
+/** Bots whose block actually costs you citations — training bots excluded. */
+const TRAINING_ONLY = new Set(["gptbot", "claudebot"]);
 
 type CheckStatus = "pass" | "warn" | "fail" | "info";
 
@@ -839,6 +842,7 @@ interface Check {
   value: string;
   hint?: string;
   wide?: boolean;
+  mono?: boolean;
 }
 
 const statusTone = (s: CheckStatus): ResultItem["tone"] =>
@@ -861,28 +865,48 @@ function computeAiReadiness(v: Record<string, number | string>): ResultItem[] {
   /* robots.txt — can AI crawlers reach you at all? */
   if (robots) {
     const { groups, sitemaps } = parseRobots(robots);
-    const blocked: string[] = [];
     const detail: string[] = [];
+    const blockedBots: string[] = [];
     for (const e of AI_BOTS) {
-      const st = e.bots.map((b) => botAccess(b, groups));
-      if (st.includes("blocked"))
-        blocked.push(
-          `${e.engine} (${e.bots.filter((b, i) => st[i] === "blocked").join(", ")})`,
-        );
-      else if (st.includes("unlisted")) detail.push(`${e.engine}: not listed`);
-      else detail.push(`${e.engine}: open`);
+      const sts = e.bots.map((b) => ({ bot: b, st: botAccess(b, groups) }));
+      for (const { bot, st } of sts)
+        if (st === "blocked") blockedBots.push(bot);
+      detail.push(
+        `${e.engine}: ${sts.some((s) => s.st === "blocked") ? "BLOCKED" : sts.some((s) => s.st === "unlisted") ? "not listed" : "open"}`,
+      );
     }
+    const blockedCritical = blockedBots.filter(
+      (b) => !TRAINING_ONLY.has(b.toLowerCase()),
+    );
+    const blockedTraining = blockedBots.filter((b) =>
+      TRAINING_ONLY.has(b.toLowerCase()),
+    );
     checks.push({
       label: "AI crawler access",
-      status: blocked.length ? "fail" : "pass",
-      value: blocked.length
-        ? `Blocked: ${blocked.join("; ")}`
+      status: blockedCritical.length ? "fail" : "pass",
+      value: blockedBots.length
+        ? `Blocked: ${blockedBots.join(", ")}`
         : "No AI crawlers blocked",
-      hint: blocked.length
-        ? "A bot that can't fetch your page can't cite you. Remove its Disallow: / rule — you can allow OAI-SearchBot & PerplexityBot while still blocking training bots like GPTBot."
-        : detail.join(" · "),
+      hint: blockedCritical.length
+        ? "These bots power AI answers — if they can't fetch your page, you can't be cited. Paste-ready fix below."
+        : detail.join(" · ") +
+          (blockedTraining.length
+            ? " — training-only blocks, fine if intentional"
+            : ""),
       wide: true,
     });
+    if (blockedCritical.length) {
+      checks.push({
+        label: "Paste-ready robots.txt fix",
+        status: "info",
+        value: blockedCritical
+          .map((b) => `User-agent: ${b}\nAllow: /\n`)
+          .join("\n"),
+        hint: "Append to robots.txt — a bot-specific group overrides the * wildcard group.",
+        wide: true,
+        mono: true,
+      });
+    }
     checks.push({
       label: "Sitemap declared",
       status: sitemaps.length ? "pass" : "warn",
@@ -1093,9 +1117,35 @@ function computeAiReadiness(v: Record<string, number | string>): ResultItem[] {
       label: "llms.txt",
       status: "warn",
       value: "Not provided",
-      hint: "Create /llms.txt — a markdown index telling AI crawlers which pages are your canonical sources. Paste yours here to validate it.",
+      hint: "Create /llms.txt — a markdown index telling AI crawlers which pages are your canonical sources. Starter below if you pasted your HTML.",
       wide: true,
     });
+    if (html) {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const t = doc.querySelector("title")?.textContent?.trim() ?? "";
+      const desc =
+        doc
+          .querySelector('meta[name="description"]')
+          ?.getAttribute("content")
+          ?.trim() ?? "";
+      const canon =
+        doc.querySelector('link[rel="canonical"]')?.getAttribute("href") ??
+        "https://yoursite.com/";
+      const brand = (t.split(/[|—–·]/).pop() ?? t).trim() || "Site name";
+      const page = (t.split(/[|—–·]/).shift() ?? t).trim() || "Home";
+      checks.push({
+        label: "llms.txt starter",
+        status: "info",
+        value:
+          `# ${brand}\n\n` +
+          `> ${desc || "One-sentence summary of what this site offers."}\n\n` +
+          `## Pages\n\n` +
+          `- [${page}](${canon})${desc ? `: ${desc}` : ""}`,
+        hint: "Save as /llms.txt at your domain root, then add one link per page worth citing.",
+        wide: true,
+        mono: true,
+      });
+    }
   }
 
   const scored = checks.filter((c) => c.status !== "info");
@@ -1124,6 +1174,7 @@ function computeAiReadiness(v: Record<string, number | string>): ResultItem[] {
       tone: statusTone(c.status),
       hint: c.hint,
       wide: c.wide,
+      mono: c.mono,
     })),
   ];
 }
