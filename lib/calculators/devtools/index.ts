@@ -1202,7 +1202,7 @@ function countKeys(n: unknown): number {
     return (
       Object.keys(n as object).length +
       Object.values(n as Record<string, unknown>).reduce(
-        (a, x) => a + countKeys(x),
+        (a: number, x) => a + countKeys(x),
         0,
       )
     );
@@ -2447,6 +2447,621 @@ export const devtoolsCalculators: CalculatorDef[] = [
       "security-headers-checker",
       "cors-config-checker",
       "secret-leak-scanner",
+    ],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "json-formatter-validator",
+    vertical: "devtools",
+    name: "JSON Formatter & Validator",
+    title: "JSON Formatter & Validator — Pretty-Print and Find Errors",
+    seoTitle: "JSON Formatter & Validator Online — Free, Private",
+    description:
+      "Paste JSON to validate and pretty-print it — with error location (line and column) when it's broken, plus key count, depth and size stats. Runs entirely in your browser.",
+    keywords: [
+      "json formatter",
+      "json validator",
+      "json beautifier",
+      "json pretty print",
+      "validate json online",
+      "json lint",
+    ],
+    fields: [
+      {
+        key: "json",
+        label: "JSON to format or validate",
+        type: "textarea",
+        rows: 12,
+        default: "",
+        placeholder: '{"name":"example","items":[1,2,3]}',
+        help: PRIVACY_NOTE,
+      },
+    ],
+    compute: computeJson,
+    assumptions: [
+      "Strict JSON per RFC 8259 — comments, trailing commas, single quotes and unquoted keys are invalid (that's JSONC/JSON5, a different format).",
+      PRIVACY_NOTE,
+    ],
+    sources: [
+      {
+        label: "RFC 8259 — The JSON Data Interchange Format",
+        url: "https://www.rfc-editor.org/rfc/rfc8259",
+      },
+    ],
+    sections: [
+      {
+        heading: "The five errors behind 95% of invalid JSON",
+        paragraphs: [
+          "Trailing commas (valid in JS objects, fatal in JSON), single-quoted strings, unquoted keys, comments, and a truncated paste from a log file. When this validator reports an error, the line/column it shows points at the first place parsing failed — which is usually a few characters after the actual mistake.",
+          "If your file uses any of the above deliberately, it's probably JSONC or JSON5 — formats that look like JSON but allow comments and trailing commas. Config files for VS Code, tsconfig and many tools are JSONC, not JSON.",
+        ],
+      },
+      {
+        heading: "Why browser-side validation matters",
+        paragraphs: [
+          "API responses routinely contain tokens, user data and internal URLs. Server-side formatters send your payload to someone's backend — this one runs entirely in the tab you're looking at, so production payloads and signed responses stay private. Open DevTools → Network while you paste; nothing is sent.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Why does my JSON fail with single quotes?",
+        a: "JSON requires double-quoted strings and keys — {'a':1} is a JS object literal, not JSON. Use double quotes throughout.",
+      },
+      {
+        q: "Are trailing commas allowed in JSON?",
+        a: "No — [1,2,] is invalid JSON though valid JavaScript. JSONC/JSON5 (VS Code configs) do allow them.",
+      },
+      {
+        q: "What's the biggest JSON this can handle?",
+        a: "Comfortably into the tens of megabytes — it's bounded by your browser's memory, not a server limit. For multi-GB files, use a streaming tool like jq instead.",
+      },
+      {
+        q: "How do I minify instead of format?",
+        a: "Strip it in code (JSON.stringify(JSON.parse(x))) — this tool pretty-prints only, since that's what humans debugging payloads need.",
+      },
+    ],
+    related: ["jwt-decoder", "regex-tester", "url-encoder-decoder"],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "cron-expression-parser",
+    vertical: "devtools",
+    name: "Cron Expression Parser",
+    title: "Cron Expression Parser — Translate Cron to English",
+    seoTitle: "Cron Expression Parser — Human-Readable Cron Explainer",
+    description:
+      "Paste a 5-field cron expression and get a plain-English schedule plus the next 5 run times — with a warning when the day-of-month/day-of-week OR-rule will surprise you.",
+    keywords: [
+      "cron expression parser",
+      "cron to english",
+      "crontab generator",
+      "cron schedule explainer",
+      "crontab calculator",
+      "cron next run",
+    ],
+    fields: [
+      {
+        key: "expression",
+        label: "Cron expression (min hour day month weekday)",
+        type: "textarea",
+        rows: 2,
+        default: "30 9 * * 1-5",
+        placeholder: "*/15 2 * * *",
+        help: "Standard 5-field format. Run times are shown in your browser's local timezone — servers usually run in UTC.",
+      },
+    ],
+    compute: computeCron,
+    assumptions: [
+      "Standard 5-field cron: minute hour day-of-month month day-of-week. Supports *, lists (1,2,3), ranges (1-5) and steps (*/15, 9-17/2).",
+      "Names (MON, JAN) and macros (@daily, @hourly) are not supported — convert them to numbers first.",
+      "When BOTH day-of-month and day-of-week are restricted, cron treats them as OR — one of the most common scheduling bugs.",
+      "Next-run times are computed in your browser's local timezone; production crons typically run in server time (usually UTC).",
+    ],
+    sources: [
+      {
+        label: "crontab(5) man page",
+        url: "https://man7.org/linux/man-pages/man5/crontab.5.html",
+      },
+    ],
+    sections: [
+      {
+        heading: "The OR-rule that schedules jobs wrong",
+        paragraphs: [
+          "Setting both day-of-month and day-of-week is the classic cron trap: '0 9 1 * 5' does NOT mean '9am on the 1st if it's a Friday' — it means '9am on the 1st AND on every Friday'. Cron ORs the two fields when both are restricted. If you meant AND, run daily and check the condition inside the job.",
+        ],
+      },
+      {
+        heading: "Reading a cron line without counting fields",
+        paragraphs: [
+          "Minute, hour, day-of-month, month, day-of-week — five fields, left to right. Most mistakes come from miscounting: '30 9' is 9:30, not 30:09 (which doesn't exist). The other classic: 0-6 vs 0-7 for day-of-week — both 0 and 7 mean Sunday, so '1-5' is your Mon–Fri range.",
+          "Step syntax: '*/15' means every 15 from the range start, '9-17/2' means 9, 11, 13, 15, 17. Try pasting '*/15 9-17 * * *' above and read the next runs — five seconds of experimenting builds more intuition than any table.",
+        ],
+      },
+      {
+        heading: "Timezones — the invisible bug",
+        paragraphs: [
+          "A cron fires in the timezone of whatever runs it. Your laptop's crontab uses local time; most servers default to UTC; CI systems have their own settings. '9:00 Monday' in UTC is 4am Eastern — the tool shows your local interpretation, so always check what timezone the actual scheduler uses.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "What does '0 9 * * 1-5' mean?",
+        a: "9:00 AM, Monday through Friday — weekday-only schedules use the 5th field with ranges like 1-5.",
+      },
+      {
+        q: "Why did my job run on BOTH the 1st and Fridays?",
+        a: "Because cron ORs day-of-month and day-of-week when both are set. '0 9 1 * 5' = on the 1st of the month AND every Friday. For AND semantics, schedule daily and gate inside the script.",
+      },
+      {
+        q: "How do I run something every 15 minutes?",
+        a: "*/15 in the minute field: '*/15 * * * *'. For every 15 minutes only in working hours: '*/15 9-17 * * *'.",
+      },
+      {
+        q: "Does cron support seconds?",
+        a: "Standard cron doesn't — the 6-field variants (Quartz, systemd timers, some schedulers) add a leading seconds field. This parser covers the classic 5-field format.",
+      },
+    ],
+    related: [
+      "regex-tester",
+      "json-formatter-validator",
+      "github-actions-security-audit",
+    ],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "regex-tester",
+    vertical: "devtools",
+    name: "Regex Tester",
+    title: "Regex Tester — Match, Groups and Positions in Real Time",
+    seoTitle: "Regex Tester Online — Live Match & Group Viewer",
+    description:
+      "Test a regular expression against your text with instant results: all matches, their positions, capture groups and flag support — runs locally, nothing sent anywhere.",
+    keywords: [
+      "regex tester",
+      "regular expression tester",
+      "regex tester online",
+      "regex match groups",
+      "javascript regex test",
+      "regex101 alternative",
+    ],
+    fields: [
+      {
+        key: "pattern",
+        label: "Pattern (without the / /)",
+        type: "textarea",
+        rows: 2,
+        default: "\\b\\w+@\\w+\\.\\w+\\b",
+        placeholder: "[A-Z]\\w+",
+        help: "JavaScript regex syntax — lookahead, named groups and unicode all supported.",
+      },
+      {
+        key: "flags",
+        label: "Flags",
+        type: "select",
+        default: "g",
+        options: [
+          { value: "g", label: "g — all matches" },
+          { value: "gi", label: "gi — all, case-insensitive" },
+          { value: "gm", label: "gm — multiline ^$" },
+          { value: "gs", label: "gs — dot matches newlines" },
+          { value: "", label: "none — first match only" },
+        ],
+      },
+      {
+        key: "text",
+        label: "Test string",
+        type: "textarea",
+        rows: 10,
+        default: "",
+        placeholder: "Paste the text to match against…",
+        help: PRIVACY_NOTE,
+      },
+    ],
+    compute: computeRegex,
+    assumptions: [
+      "JavaScript regex engine semantics — mostly compatible with PCRE, but watch for lookbehind support and subtle \\b / unicode differences.",
+      "Matches are capped at 100 for display; the engine stops at the first 20 shown with group details.",
+      PRIVACY_NOTE,
+    ],
+    sources: [
+      {
+        label: "MDN — Regular expressions",
+        url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions",
+      },
+    ],
+    sections: [
+      {
+        heading: "The flags that change everything",
+        paragraphs: [
+          "Most 'my regex works here but not there' bugs are flag differences. Without g, you get only the first match — test() and match() disagree. Without m, ^ and $ anchor only to the string ends, not each line. Without s, the dot stops at newlines — why '.*' fails on multi-line input.",
+          "Case-insensitivity (i) is the other trap: it folds more than ASCII in Unicode mode, which is why [a-z] with i can match characters you didn't expect.",
+        ],
+      },
+      {
+        heading: "Capture groups: what the positions mean",
+        paragraphs: [
+          "Each match shows its index (0-based character position) and captured groups — the parts in parentheses, in order. Group 0 is always the full match. If a group is optional and didn't participate, it shows as undefined — the classic source of 'group 2 is empty' bugs.",
+        ],
+      },
+      {
+        heading: "JavaScript regex quirks worth knowing",
+        paragraphs: [
+          "JS supports lookahead and (in modern engines) lookbehind, named groups (?<name>…), and unicode-aware \\p{…} classes. What it lacks vs PCRE: \\z anchors (use $ with care), recursive patterns, and atomic groups — a pattern that works in PHP/Python may need adapting here.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Why does my regex only match once?",
+        a: "You need the g flag — without it exec() and match() return just the first match. Select 'g — all matches' above.",
+      },
+      {
+        q: "What's the difference between match and test?",
+        a: "test() returns true/false; match() returns the strings (or null). With g, match() returns all matches but loses capture groups — use matchAll() or exec() in a loop for groups.",
+      },
+      {
+        q: "How do I match an email?",
+        a: "For validation that isn't insane: \\b\\w+@\\w+\\.\\w+\\b catches most cases. The 'perfect' RFC email regex is thousands of characters — almost nobody actually needs it.",
+      },
+      {
+        q: "Why does '.' not match my newline?",
+        a: "The dot never matches \\n without the s (dotAll) flag. Use [\\s\\S] or enable 'gs' mode above.",
+      },
+    ],
+    related: ["json-formatter-validator", "jwt-decoder", "secret-leak-scanner"],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "base64-encoder-decoder",
+    vertical: "devtools",
+    name: "Base64 Encoder & Decoder",
+    title: "Base64 Encoder & Decoder — With Unicode Support",
+    seoTitle: "Base64 Encode & Decode Online — Free, Private",
+    description:
+      "Encode text to Base64 or decode it back — proper UTF-8 handling so non-ASCII characters don't corrupt. Runs entirely in your browser.",
+    keywords: [
+      "base64 encoder",
+      "base64 decoder",
+      "base64 encode decode",
+      "base64 to text",
+      "text to base64",
+      "decode base64 online",
+    ],
+    fields: [
+      {
+        key: "mode",
+        label: "Mode",
+        type: "select",
+        default: "encode",
+        options: [
+          { value: "encode", label: "Encode → Base64" },
+          { value: "decode", label: "Decode ← Base64" },
+        ],
+      },
+      {
+        key: "input",
+        label: "Input",
+        type: "textarea",
+        rows: 8,
+        default: "",
+        placeholder: "Text to encode, or Base64 to decode…",
+        help: PRIVACY_NOTE,
+      },
+    ],
+    compute: computeBase64,
+    assumptions: [
+      "UTF-8 aware — emoji and non-ASCII text encode/decode correctly (the naive atob/btoa path corrupts them).",
+      "Standard Base64 alphabet (+/=). Base64URL (- and _) used in JWTs and filenames isn't auto-detected — swap characters if decoding fails.",
+      PRIVACY_NOTE,
+    ],
+    sources: [
+      {
+        label: "RFC 4648 — Base64 encoding",
+        url: "https://www.rfc-editor.org/rfc/rfc4648",
+      },
+    ],
+    sections: [
+      {
+        heading: "Why Base64 makes things 33% bigger",
+        paragraphs: [
+          "Base64 stores 3 bytes in 4 ASCII-safe characters — it's a transport encoding for moving binary data through text-only channels (email, JSON, URLs, HTML attributes), not a compression or encryption format. Every API that embeds an image or file as a string pays that 33% tax.",
+          "Which is also the answer to 'is Base64 secure?': it's obfuscation at best — anyone can decode it instantly. Never store secrets as 'encoded' Base64 and assume they're protected.",
+        ],
+      },
+      {
+        heading: "The Unicode trap in btoa/atob",
+        paragraphs: [
+          "The browser's built-in atob() and btoa() work on bytes, not characters — feed btoa() a string with anything above \\u00ff and it throws or corrupts. The correct path is TextEncoder → bytes → btoa for encoding, and atob → bytes → TextDecoder for decoding. This tool does exactly that, which is why '你好' and emoji round-trip correctly here.",
+        ],
+      },
+      {
+        heading: "Base64 vs Base64URL — the one-character difference",
+        paragraphs: [
+          "JWTs and URLs use Base64URL: the same encoding with +→-, /→_, and no = padding, so the output survives URLs and filenames unencoded. If a Base64 string with - or _ fails to decode, it's Base64URL — replace the characters and try again.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "How do I decode Base64?",
+        a: "Select 'Decode ← Base64' above and paste — whitespace is ignored. If it fails with weird characters, it's likely Base64URL: swap - for + and _ for /.",
+      },
+      {
+        q: "Is Base64 encryption?",
+        a: "No — it's encoding, not encryption. Anyone can decode it instantly; never treat Base64 as a way to hide secrets.",
+      },
+      {
+        q: "Why is my decoded output garbled?",
+        a: "Usually a charset issue — the tool decodes as UTF-8. If the source was encoded as Latin-1 or another legacy encoding, text will look wrong; binary data isn't meant to be read as text at all.",
+      },
+      {
+        q: "Can I encode a file or image?",
+        a: "This tool handles text. For files, your OS is faster: certutil -encode on Windows, base64 <file> on Linux/macOS.",
+      },
+    ],
+    related: ["jwt-decoder", "url-encoder-decoder", "json-formatter-validator"],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "url-encoder-decoder",
+    vertical: "devtools",
+    name: "URL Encoder / Decoder / Analyzer",
+    title: "URL Encoder, Decoder & Analyzer — Parse Any URL",
+    seoTitle: "URL Encode Decode & Analyze — Free Online Tool",
+    description:
+      "Percent-encode or decode strings, and break any URL into protocol, host, path, query params and fragment — decoded params listed cleanly.",
+    keywords: [
+      "url encoder",
+      "url decoder",
+      "percent encode",
+      "url encode decode online",
+      "parse url online",
+      "query string parser",
+    ],
+    fields: [
+      {
+        key: "mode",
+        label: "Mode",
+        type: "select",
+        default: "analyze",
+        options: [
+          { value: "analyze", label: "Analyze — break URL into parts" },
+          { value: "encode", label: "Encode → %-escaped" },
+          { value: "decode", label: "Decode ← %-escaped" },
+        ],
+      },
+      {
+        key: "input",
+        label: "URL or string",
+        type: "textarea",
+        rows: 6,
+        default: "",
+        placeholder: "https://example.com/search?q=hello%20world&lang=en",
+        help: PRIVACY_NOTE,
+      },
+    ],
+    compute: computeUrl,
+    assumptions: [
+      "Analyze mode parses via the WHATWG URL parser (same as your browser's new URL()).",
+      "Encode uses encodeURIComponent — safe for query values, encodes reserved characters like / : ? & =.",
+      PRIVACY_NOTE,
+    ],
+    sources: [
+      {
+        label: "WHATWG URL Standard",
+        url: "https://url.spec.whatwg.org/",
+      },
+    ],
+    sections: [
+      {
+        heading: "encodeURIComponent vs encodeURI — the classic bug",
+        paragraphs: [
+          "encodeURIComponent escapes everything that could confuse a query string (including & = ? /), while encodeURI preserves URL structure characters. Pick wrong and your redirect breaks: a callback URL passed as a ?redirect= parameter MUST use encodeURIComponent, or the inner '?' and '&' leak into the outer query.",
+          "Rule of thumb: encodeURIComponent for any value going INSIDE a URL; encodeURI only for whole-URL display encoding.",
+        ],
+      },
+      {
+        heading: "What percent-encoding actually does",
+        paragraphs: [
+          "URLs can only carry a limited ASCII set. Everything else — spaces, non-English characters, and characters with special meaning — gets percent-encoded: each byte becomes % followed by its hex value. ' ' → %20, 'ć' → %C4%87 (two UTF-8 bytes). Double-encoding is the classic bug: encode once, and %20 becomes %2520.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "How do I decode a URL-encoded string?",
+        a: "Select 'Decode' mode and paste — malformed input (a % not followed by two hex digits) will be flagged.",
+      },
+      {
+        q: "Why does %20 keep appearing as %2520?",
+        a: "That's double encoding — something encoded an already-encoded string. %2520 is literally the percent-escape of the text '%20'. Decode twice, or fix the source to encode once.",
+      },
+      {
+        q: "What's the difference between a URL and URI?",
+        a: "A URL is a URI that also tells you how to locate the resource (scheme + host). In daily work the terms are interchangeable; the standard that governs parsing is WHATWG URL.",
+      },
+      {
+        q: "Why does analyze fail on 'example.com'?",
+        a: "A URL needs a scheme — the parser can't guess it's a URL without 'https://'. Add the scheme, or use encode mode.",
+      },
+    ],
+    related: [
+      "base64-encoder-decoder",
+      "json-formatter-validator",
+      "security-headers-checker",
+    ],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "uuid-generator",
+    vertical: "devtools",
+    name: "UUID Generator",
+    title: "UUID Generator — Bulk v4 UUIDs, Cryptographically Random",
+    seoTitle: "UUID Generator — Bulk Random UUIDs Online",
+    description:
+      "Generate up to 50 random UUIDs (v4) at once — cryptographically secure, instantly copyable, with uppercase option. No server, no tracking, just crypto.randomUUID().",
+    keywords: [
+      "uuid generator",
+      "uuid v4 generator",
+      "generate uuid online",
+      "random uuid",
+      "guid generator",
+      "bulk uuid generator",
+    ],
+    fields: [
+      {
+        key: "count",
+        label: "How many",
+        type: "number",
+        default: 10,
+        min: 1,
+        max: 50,
+        step: 1,
+      },
+      {
+        key: "format",
+        label: "Format",
+        type: "select",
+        default: "lower",
+        options: [
+          { value: "lower", label: "lowercase (standard)" },
+          { value: "upper", label: "UPPERCASE" },
+        ],
+      },
+    ],
+    compute: computeUuid,
+    assumptions: [
+      "UUIDs are generated by crypto.randomUUID() — a proper CSPRNG, not Math.random().",
+      "v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx where y ∈ {8,9,a,b} — 122 bits of randomness.",
+      PRIVACY_NOTE,
+    ],
+    sources: [
+      {
+        label: "RFC 9562 — UUIDs",
+        url: "https://www.rfc-editor.org/rfc/rfc9562",
+      },
+    ],
+    sections: [
+      {
+        heading: "Why you can just generate and not check",
+        paragraphs: [
+          "A v4 UUID has 122 random bits — the odds of a collision between two generated IDs are so low that 'generate and check for uniqueness' is actively wrong engineering. You'd need ~2.7×10¹⁸ UUIDs for a 50% collision chance; your database will run out of disk first. This is why UUIDs replaced sequences for distributed IDs.",
+          "The practical caveat: UUIDs make lousy primary keys in B-tree indexes because random inserts fragment the index. UUIDv7 (time-ordered, new in RFC 9562) fixes this — use it where insert order matters.",
+        ],
+      },
+      {
+        heading: "v4 vs v7 — which UUID version",
+        paragraphs: [
+          "v4 (what this generates) is pure randomness — the right choice for most uses, universally supported. v7 embeds a millisecond timestamp in the first bits, making UUIDs sortable and index-friendly; it's the modern default for database keys. v1 (time+MAC) and v3/v5 (hash-based) are legacy — never use v1, it leaks your MAC address.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Are these UUIDs safe to use?",
+        a: "Yes — they're generated by crypto.randomUUID(), a cryptographically secure random source, not Math.random(). Suitable for session IDs, tokens and database keys.",
+      },
+      {
+        q: "Can two UUIDs ever collide?",
+        a: "Mathematically possible, practically impossible — ~122 bits of randomness means you'd need quintillions of UUIDs before a collision becomes likely. Don't check for uniqueness; it's a waste.",
+      },
+      {
+        q: "UUID vs GUID — what's the difference?",
+        a: "Nothing — GUID is Microsoft's name for the same RFC 4122/9562 identifier format. Same structure, different branding.",
+      },
+      {
+        q: "Should I use UUIDs as database primary keys?",
+        a: "v4 UUIDs work but fragment B-tree indexes due to random inserts. UUIDv7 (time-ordered) is the better modern choice for PKs — this generator produces v4.",
+      },
+    ],
+    related: ["jwt-decoder", "base64-encoder-decoder", "secret-leak-scanner"],
+    updatedAt: UPDATED,
+  },
+
+  {
+    slug: "color-converter",
+    vertical: "devtools",
+    name: "Color Converter",
+    title: "Color Converter — HEX, RGB & HSL with Contrast Check",
+    seoTitle: "Color Converter — HEX ↔ RGB ↔ HSL + WCAG Contrast",
+    description:
+      "Convert any color between HEX, RGB and HSL — plus instant WCAG contrast ratios against white and black text so you know it's accessible.",
+    keywords: [
+      "color converter",
+      "hex to rgb",
+      "rgb to hsl",
+      "hex to hsl",
+      "color contrast checker",
+      "wcag contrast ratio",
+    ],
+    fields: [
+      {
+        key: "color",
+        label: "Color (any format)",
+        type: "textarea",
+        rows: 2,
+        default: "#3b82f6",
+        placeholder: "#3b82f6, rgb(59,130,246) or hsl(217,91%,60%)",
+        help: "Accepts #hex (3 or 6 digits), rgb(), rgba(), hsl(), hsla().",
+      },
+    ],
+    compute: computeColor,
+    assumptions: [
+      "sRGB color space throughout — the web standard.",
+      "Contrast ratios per WCAG 2.x formula — AA requires ≥4.5:1 for normal text, ≥3:1 for large text.",
+    ],
+    sources: [
+      {
+        label: "WCAG — Contrast (Minimum)",
+        url: "https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html",
+      },
+    ],
+    sections: [
+      {
+        heading: "When to use which format",
+        paragraphs: [
+          "HEX is for constants — '#3b82f6' is compact and what design tools emit. RGB is for manipulation — easy to alpha-blend (rgba), easy to loop. HSL is for humans — want a darker version? Drop L by 10%. Want a complementary hue? Add 180° to H. Professional palettes are authored in HSL and compiled to HEX.",
+          "The converter shows all three because real-world work needs all three: the mockup gives you HEX, the animation needs RGB, and you figure out hover states in HSL.",
+        ],
+      },
+      {
+        heading: "The contrast numbers that matter",
+        paragraphs: [
+          "WCAG AA requires 4.5:1 for body text, 3:1 for large text (18pt+ or 14pt bold). AAA demands 7:1. The ratios here are computed against pure white and pure black text — for colored text-on-color checks, compute both colors and compare their luminances the same way.",
+          "The classic failure: medium-gray text (#777) on white is only ~4.5:1 — technically passing, practically unreadable in sunlight. Design for 7:1 on anything that matters.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "How do I convert HEX to RGB?",
+        a: "Paste the hex value above — or mentally: each pair is one channel in base-16. #3b82f6 = rgb(59, 130, 246).",
+      },
+      {
+        q: "What contrast ratio is accessible?",
+        a: "WCAG AA: 4.5:1 for normal text, 3:1 for large text (18pt+). AAA: 7:1. Below 3:1 fails everywhere.",
+      },
+      {
+        q: "Why does #48f work?",
+        a: "3-digit hex is shorthand — each digit doubles: #48f = #4488ff. Supported here and in CSS.",
+      },
+      {
+        q: "What about alpha/transparency?",
+        a: "rgba() and hsla() inputs are accepted — the alpha is ignored for conversion since it's a separate channel. Compose it back in your CSS.",
+      },
+    ],
+    related: [
+      "json-formatter-validator",
+      "url-encoder-decoder",
+      "regex-tester",
     ],
     updatedAt: UPDATED,
   },
