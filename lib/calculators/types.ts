@@ -74,4 +74,10 @@ export interface CalculatorDef {
   /** Slugs of related calculators (any vertical). */
   related: string[];
   updatedAt: string;
+  /**
+   * Compute only after client hydration — for tools that use nondeterministic
+   * APIs (Date.now, crypto.randomUUID) which can't run during prerender.
+   * A "Refresh" button is shown to re-run the computation.
+   */
+  deferCompute?: boolean;
 }

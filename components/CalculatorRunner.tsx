@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FieldValues } from "@/lib/calculators/types";
 import { getCalculator } from "@/lib/calculators";
 
@@ -33,9 +33,13 @@ export function CalculatorRunner({
   }, [calc]);
 
   const [values, setValues] = useState<FieldValues>(initial);
+  const [mounted, setMounted] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => setMounted(true), []);
+  const canCompute = calc && (!calc.deferCompute || mounted);
   const results = useMemo(
-    () => (calc ? calc.compute(values) : []),
-    [calc, values],
+    () => (canCompute ? calc.compute({ ...values, __nonce: nonce }) : []),
+    [canCompute, calc, values, nonce],
   );
 
   if (!calc) return null;
@@ -113,6 +117,16 @@ export function CalculatorRunner({
           </label>
         ))}
       </div>
+
+      {calc.deferCompute && (
+        <button
+          type="button"
+          onClick={() => setNonce((n) => n + 1)}
+          className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Refresh
+        </button>
+      )}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {results.map((r, i) => (

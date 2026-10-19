@@ -1,4 +1,5 @@
 import type { CalculatorDef, ResultItem } from "../types";
+import { num } from "../../format";
 
 const LITE_REPO = "https://github.com/NenadZivotic/lite-agent-skills";
 const AGENSI = (slug: string) => `https://agensi.io/skills/${slug}`;
@@ -1742,6 +1743,403 @@ function computeColor(v: Record<string, number | string>): ResultItem[] {
 }
 
 /* ------------------------------------------------------------------ */
+/* 15. Unix timestamp converter                                        */
+/* ------------------------------------------------------------------ */
+
+function relTime(ms: number): string {
+  const s = Math.round(Math.abs(ms) / 1000);
+  const units: [number, string][] = [
+    [60, "second"],
+    [60, "minute"],
+    [24, "hour"],
+    [7, "day"],
+    [4.345, "week"],
+    [12, "month"],
+    [Infinity, "year"],
+  ];
+  let v = s,
+    u = "second";
+  for (const [f, name] of units) {
+    if (v < f) {
+      u = name;
+      break;
+    }
+    v /= f;
+    u = name;
+  }
+  const n = Math.max(1, Math.round(v));
+  const plural = n === 1 ? u : u + "s";
+  return ms >= 0 ? `in ${n} ${plural}` : `${n} ${plural} ago`;
+}
+
+function computeTimestamp(v: Record<string, number | string>): ResultItem[] {
+  const input = String(v.input ?? "").trim();
+  if (!input) return noInput();
+
+  let d: Date | null = null;
+  if (/^-?\d{9,15}$/.test(input)) {
+    const n = Number(input);
+    // Auto-detect unit by magnitude: s (1e9-1e10), ms (1e12-1e13), µs (1e15)
+    if (input.length <= 10) d = new Date(n * 1000);
+    else if (input.length <= 13) d = new Date(n);
+    else d = new Date(n / 1000);
+  } else {
+    const p = Date.parse(input);
+    if (!Number.isNaN(p)) d = new Date(p);
+  }
+  if (!d || Number.isNaN(d.getTime()))
+    return [
+      {
+        label: "Can't parse",
+        value: "Not a timestamp or a readable date",
+        tone: "bad",
+        wide: true,
+        hint: "Accepted: 1715000000 (s), 1715000000000 (ms), or a date like '2026-10-19 14:30'",
+      },
+    ];
+
+  const ms = d.getTime();
+  return [
+    {
+      label: "ISO 8601 (UTC)",
+      value: d.toISOString(),
+      mono: true,
+      wide: true,
+      tone: "primary",
+    },
+    { label: "Unix seconds", value: String(Math.floor(ms / 1000)), mono: true },
+    { label: "Milliseconds", value: String(ms), mono: true },
+    {
+      label: "Relative",
+      value: relTime(ms - Date.now()),
+      tone: "primary",
+    },
+    {
+      label: "Local time",
+      value: d.toLocaleString("en-US", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }),
+      wide: true,
+    },
+    {
+      label: "Now",
+      value: `${Math.floor(Date.now() / 1000)} (s)`,
+      mono: true,
+      hint: "current Unix timestamp at compute time",
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 16. Text diff checker                                               */
+/* ------------------------------------------------------------------ */
+
+function computeDiff(v: Record<string, number | string>): ResultItem[] {
+  const a = String(v.before ?? "");
+  const b = String(v.after ?? "");
+  if (!a.trim() && !b.trim()) return noInput();
+  const al = a.split("\n");
+  const bl = b.split("\n");
+  if (al.length > 1500 || bl.length > 1500)
+    return [
+      {
+        label: "Too large",
+        value: "Inputs capped at 1,500 lines each",
+        tone: "bad",
+        wide: true,
+        hint: "For big diffs use git diff locally.",
+      },
+    ];
+
+  const n = al.length,
+    m = bl.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] =
+        al[i] === bl[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+
+  const rows: { t: "same" | "add" | "del"; s: string }[] = [];
+  let i = 0,
+    j = 0;
+  while (i < n && j < m) {
+    if (al[i] === bl[j]) {
+      rows.push({ t: "same", s: "  " + al[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      rows.push({ t: "del", s: "- " + al[i] });
+      i++;
+    } else {
+      rows.push({ t: "add", s: "+ " + bl[j] });
+      j++;
+    }
+  }
+  while (i < n) rows.push({ t: "del", s: "- " + al[i++] });
+  while (j < m) rows.push({ t: "add", s: "+ " + bl[j++] });
+
+  const adds = rows.filter((r) => r.t === "add").length;
+  const dels = rows.filter((r) => r.t === "del").length;
+  const changed = adds + dels;
+  return [
+    {
+      label: "Verdict",
+      value: changed ? `+${adds} / −${dels} lines changed` : "Identical",
+      tone: changed ? "primary" : "good",
+      wide: true,
+      hint: `${n} → ${m} lines`,
+    },
+    {
+      label: "Diff",
+      value: rows.map((r) => r.s).join("\n"),
+      mono: true,
+      wide: true,
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 17. Word counter                                                    */
+/* ------------------------------------------------------------------ */
+
+function computeWordCount(v: Record<string, number | string>): ResultItem[] {
+  const text = String(v.text ?? "");
+  if (!text.trim()) return noInput();
+  const words = text.split(/\s+/).filter(Boolean);
+  const sentences = text.split(/[.!?…]+/).filter((s) => s.trim().length > 0);
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+  const chars = text.length;
+  const noSpaces = text.replace(/\s/g, "").length;
+  const freq = new Map<string, number>();
+  for (const w of words) {
+    const k = w.toLowerCase().replace(/[^\w'-]/g, "");
+    if (k) freq.set(k, (freq.get(k) ?? 0) + 1);
+  }
+  const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const readMin = words.length / 200;
+  return [
+    { label: "Words", value: num(words.length), tone: "primary" },
+    {
+      label: "Characters",
+      value: num(chars),
+      hint: `${num(noSpaces)} without spaces`,
+    },
+    { label: "Sentences", value: num(sentences.length) },
+    { label: "Paragraphs", value: num(paragraphs.length) },
+    {
+      label: "Reading time",
+      value:
+        readMin < 1
+          ? `${Math.ceil(readMin * 60)}s`
+          : `~${readMin.toFixed(1)} min`,
+      hint: "at 200 wpm average",
+    },
+    {
+      label: "Top words",
+      value: top.map(([w, c]) => `${w} ×${c}`).join("  ·  ") || "—",
+      wide: true,
+      mono: true,
+      hint: "most frequent — keyword stuffing check for SEO",
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 18. Text case converter                                             */
+/* ------------------------------------------------------------------ */
+
+function wordsOf(s: string): string[] {
+  return s
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+const titleCase = (ws: string[]) =>
+  ws.map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+
+function computeCase(v: Record<string, number | string>): ResultItem[] {
+  const input = String(v.input ?? "");
+  if (!input.trim()) return noInput();
+  const ws = wordsOf(input);
+  if (!ws.length)
+    return [
+      {
+        label: "No words found",
+        value: "Letters and digits only",
+        tone: "bad",
+        wide: true,
+      },
+    ];
+  return [
+    {
+      label: "camelCase",
+      value: ws[0] + titleCase(ws.slice(1)).replace(/ /g, ""),
+      mono: true,
+    },
+    { label: "PascalCase", value: titleCase(ws).replace(/ /g, ""), mono: true },
+    { label: "snake_case", value: ws.join("_"), mono: true },
+    { label: "kebab-case", value: ws.join("-"), mono: true },
+    { label: "SCREAMING_SNAKE", value: ws.join("_").toUpperCase(), mono: true },
+    { label: "Title Case", value: titleCase(ws), mono: true },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 19. Number base converter                                           */
+/* ------------------------------------------------------------------ */
+
+function computeBase(v: Record<string, number | string>): ResultItem[] {
+  const input = String(v.input ?? "")
+    .trim()
+    .toLowerCase();
+  if (!input) return noInput();
+  let n: bigint | null = null;
+  try {
+    if (
+      /^0x[0-9a-f]+$/.test(input) ||
+      (/^[0-9a-f]+$/.test(input) && /[a-f]/.test(input))
+    )
+      n = BigInt("0x" + input.replace(/^0x/, ""));
+    else if (/^0b[01]+$/.test(input)) n = BigInt(input);
+    else if (/^0o[0-7]+$/.test(input)) n = BigInt(input);
+    else if (/^-?\d+$/.test(input)) n = BigInt(input);
+  } catch {
+    n = null;
+  }
+  if (n === null)
+    return [
+      {
+        label: "Can't parse",
+        value: "Not a recognizable number",
+        tone: "bad",
+        wide: true,
+        hint: "Accepted: decimal 255, hex 0xff or ff (with letters), binary 0b1010, octal 0o17",
+      },
+    ];
+  const hex = n < 0n ? "-0x" + (-n).toString(16) : "0x" + n.toString(16);
+  return [
+    { label: "Decimal", value: n.toString(10), mono: true, tone: "primary" },
+    { label: "Hex", value: hex, mono: true },
+    {
+      label: "Binary",
+      value: (n < 0n ? "-" : "") + "0b" + (n < 0n ? -n : n).toString(2),
+      mono: true,
+      wide: true,
+    },
+    {
+      label: "Octal",
+      value: (n < 0n ? "-" : "") + "0o" + (n < 0n ? -n : n).toString(8),
+      mono: true,
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
+/* 20. Aspect ratio calculator                                         */
+/* ------------------------------------------------------------------ */
+
+function gcd(a: number, b: number): number {
+  return b ? gcd(b, a % b) : a;
+}
+
+function computeAspect(v: Record<string, number | string>): ResultItem[] {
+  const w = Number(v.width) || 0;
+  const h = Number(v.height) || 0;
+  const newW = Number(v.newWidth) || 0;
+  const newH = Number(v.newHeight) || 0;
+  if (w <= 0 || h <= 0)
+    return [
+      {
+        label: "Waiting",
+        value: "Enter width and height",
+        tone: "primary",
+        wide: true,
+      },
+    ];
+  const g = gcd(Math.round(w), Math.round(h));
+  const rw = Math.round(w) / g,
+    rh = Math.round(h) / g;
+  const out: ResultItem[] = [
+    { label: "Aspect ratio", value: `${rw}:${rh}`, tone: "primary" },
+    {
+      label: "As decimal",
+      value: (w / h).toFixed(4),
+      hint: "width ÷ height",
+    },
+  ];
+  if (newW > 0)
+    out.push({
+      label: `At ${Math.round(newW)}px wide`,
+      value: `${Math.round(newW)} × ${Math.round((newW * h) / w)}px`,
+      tone: "good",
+      hint: "height scaled to keep the ratio",
+    });
+  if (newH > 0)
+    out.push({
+      label: `At ${Math.round(newH)}px tall`,
+      value: `${Math.round((newH * w) / h)} × ${Math.round(newH)}px`,
+      tone: "good",
+      hint: "width scaled to keep the ratio",
+    });
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* 21. Lorem ipsum generator                                           */
+/* ------------------------------------------------------------------ */
+
+const LOREM =
+  "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in reprehenderit voluptate velit esse cillum eu fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa qui officia deserunt mollit anim id est laborum".split(
+    " ",
+  );
+
+function loremPara(seed: number, sentences: number): string {
+  const parts: string[] = [];
+  for (let s = 0; s < sentences; s++) {
+    const len = 6 + ((seed * 7 + s * 11) % 9);
+    const start = (seed * 13 + s * 29) % LOREM.length;
+    const ws = Array.from(
+      { length: len },
+      (_, i) => LOREM[(start + i) % LOREM.length],
+    );
+    const sent = ws.join(" ");
+    parts.push(sent[0].toUpperCase() + sent.slice(1) + ".");
+  }
+  return parts.join(" ");
+}
+
+function computeLorem(v: Record<string, number | string>): ResultItem[] {
+  const paras = Math.min(
+    20,
+    Math.max(1, Math.round(Number(v.paragraphs) || 3)),
+  );
+  const text = Array.from({ length: paras }, (_, i) =>
+    loremPara(i, 3 + (i % 3)),
+  ).join("\n\n");
+  return [
+    {
+      label: `${paras} paragraph${paras > 1 ? "s" : ""}`,
+      value: text,
+      mono: true,
+      wide: true,
+      tone: "good",
+      hint: `${text.split(/\s+/).filter(Boolean).length} words · deterministic output, safe for mockups`,
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ */
 /* Definitions                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -2611,6 +3009,7 @@ export const devtoolsCalculators: CalculatorDef[] = [
       "github-actions-security-audit",
     ],
     updatedAt: UPDATED,
+    deferCompute: true,
   },
 
   {
@@ -2984,6 +3383,7 @@ export const devtoolsCalculators: CalculatorDef[] = [
     ],
     related: ["jwt-decoder", "base64-encoder-decoder", "secret-leak-scanner"],
     updatedAt: UPDATED,
+    deferCompute: true,
   },
 
   {
